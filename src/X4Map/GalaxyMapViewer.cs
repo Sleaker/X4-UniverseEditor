@@ -324,12 +324,12 @@ namespace X4Map
       _canvasHeightBase = (MapInfo.RowMax - MapInfo.RowMin) * 0.5 + 1;
     }
 
-    public async Task ExportToPng(Canvas sourceCanvas, string filePath)
+    // Creates and prepares an export canvas for image export. Implementation to be added.
+    private async Task<(double Width, double Height)> UpdateExportCanvas(Canvas sourceCanvas)
     {
-      if (sourceCanvas == null)
-        throw new ArgumentNullException(nameof(sourceCanvas));
+      ArgumentNullException.ThrowIfNull(sourceCanvas);
 
-      Dispatcher.Invoke(sourceCanvas.UpdateLayout, DispatcherPriority.Render);
+      await Dispatcher.InvokeAsync(sourceCanvas.UpdateLayout, DispatcherPriority.ContextIdle);
 
       if (sourceCanvas.ActualWidth == 0 || sourceCanvas.ActualHeight == 0)
         throw new InvalidOperationException("Canvas has zero width or height.");
@@ -337,55 +337,73 @@ namespace X4Map
       // Create a new canvas and copy properties
       // Need to run this on the UI thread and have it return back the resulting canvas
 
-      Dispatcher.Invoke(new Action(() =>
+      await Dispatcher.InvokeAsync(new Action(() =>
       {
+        Log.Debug($"Generating new ExportCanvas");
         ExportCanvas = new Canvas
         {
           Width = sourceCanvas.ActualWidth,
           Height = sourceCanvas.ActualHeight,
           Background = Brushes.Transparent
         };
-      }), DispatcherPriority.Normal);
+      }), DispatcherPriority.ContextIdle);
 
       if (ExportCanvas == null)
         throw new InvalidOperationException("Failed to create export canvas.");
 
-      var elements = Dispatcher.Invoke(() => sourceCanvas.Children, DispatcherPriority.Background);
-      foreach (UIElement child in elements)
+      await Dispatcher.InvokeAsync(() =>
       {
-        try
+        Log.Debug($"Copying all Child elements from sourceCanvas");
+        foreach (UIElement child in sourceCanvas.Children)
         {
-          var xaml = System.Windows.Markup.XamlWriter.Save(child);
-          var deepCopy = System.Windows.Markup.XamlReader.Parse(xaml) as UIElement;
-          if (deepCopy == null)
+          if (child is Image img && img.Source is System.Windows.Media.Imaging.WriteableBitmap)
             continue;
-          ExportCanvas.Children.Add(deepCopy);
+          try
+          {
+            var xaml = System.Windows.Markup.XamlWriter.Save(child);
+            if (System.Windows.Markup.XamlReader.Parse(xaml) is not UIElement deepCopy)
+              continue;
+            ExportCanvas.Children.Add(deepCopy);
+          }
+          catch (Exception ex)
+          {
+            Log.Error($"Failed to copy element: {ex.Message}");
+          }
         }
-        catch (Exception ex)
-        {
-          Log.Error($"Failed to copy element: {ex.Message}");
-        }
-      }
+      }, DispatcherPriority.ContextIdle);
 
-      var WidthAndHeight = Dispatcher.Invoke(() =>
+
+      return await Dispatcher.InvokeAsync(() =>
       {
         ExportCanvas.Measure(new Size(ExportCanvas.Width, ExportCanvas.Height));
         ExportCanvas.Arrange(new Rect(0, 0, ExportCanvas.Width, ExportCanvas.Height));
         ExportCanvas.UpdateLayout();
         return (ExportCanvas.Width, ExportCanvas.Height);
-       }, DispatcherPriority.Background);
+      }, DispatcherPriority.ContextIdle);
+    }
 
+    public async void ExportToPng(Canvas sourceCanvas, string filePath)
+    {
+      Log.Info($"Starting export to PNG: Current Thread ID: {Environment.CurrentManagedThreadId}");
+      var task = await UpdateExportCanvas(sourceCanvas);
 
-      // Render to bitmap
-      var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
-        (int) WidthAndHeight.Width, (int) WidthAndHeight.Height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
-      rtb.Render(ExportCanvas);
+      var rtb = Dispatcher.Invoke(() =>
+      {
+        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
+        (int)task.Width, (int)task.Height, 96, 96, PixelFormats.Pbgra32);
+        rtb.Render(ExportCanvas);
+        rtb.Freeze();
+        return rtb;
+        }, DispatcherPriority.ContextIdle);
 
       // Encode as PNG
-      var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-      encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
-      using var fs = System.IO.File.OpenWrite(filePath);
-      encoder.Save(fs);
+      await Task.Run(() =>
+      {
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(rtb));
+        using var fs = System.IO.File.OpenWrite(filePath);
+        encoder.Save(fs);
+      });
     }
 
     private void CreateMap()

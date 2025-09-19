@@ -111,7 +111,7 @@ namespace ChemGateBuilder
       }
     }
 
-    private void ExportPngButton_Click(object sender, RoutedEventArgs e)
+    private async void ExportPngButton_Click(object sender, RoutedEventArgs e)
     {
       var dialog = new Microsoft.Win32.SaveFileDialog
       {
@@ -124,25 +124,21 @@ namespace ChemGateBuilder
         return;
       }
 
-
-      // await Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
-      BackgroundWorker worker = new BackgroundWorker();
-      worker.DoWork += (s, args) => GalaxyMapViewer.ExportToPng(GalaxyMapCanvas, dialog.FileName);
-      worker.RunWorkerCompleted += (s, args) =>
-      {
-        if (args.Error != null)
-        {
-          Log.Warn($"Error exporting PNG: {args.Error}");
-          MessageBox.Show($"Error exporting PNG: {args.Error.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        else
-        {
-          MessageBox.Show("Galaxy map exported successfully.", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        MainBusyIndicator.IsBusy = false; // Hide busy indicator
-      };
       MainBusyIndicator.IsBusy = true;  // Show busy indicator
-      worker.RunWorkerAsync();
+      // Allow the Busy Indicator to Update
+      await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+      try
+      {
+        await Task.Run(() => GalaxyMapViewer.ExportToPng(GalaxyMapCanvas, dialog.FileName));
+      }
+      catch (Exception ex)
+      {
+        Log.Warn($"Error exporting PNG: {ex}");
+        MessageBox.Show($"Error exporting PNG: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+      }
+      finally {
+        MainBusyIndicator.IsBusy = false; // Hide busy indicator
+      }
     }
 
     private void ButtonOptionsVisibility_Click(object sender, RoutedEventArgs e)
