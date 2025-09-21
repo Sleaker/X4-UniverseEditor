@@ -12,6 +12,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using System.Xml;
 using Utilities.Logging;
 using X4DataLoader;
 using X4Map.Constants;
@@ -325,13 +326,13 @@ namespace X4Map
     }
 
     // Creates and prepares an export canvas for image export. Implementation to be added.
-    private async Task<(double Width, double Height)> UpdateExportCanvas(Canvas sourceCanvas)
+    private async Task<(double Width, double Height)> UpdateExportCanvas()
     {
-      ArgumentNullException.ThrowIfNull(sourceCanvas);
+      ArgumentNullException.ThrowIfNull(GalaxyCanvas);
 
-      await Dispatcher.InvokeAsync(sourceCanvas.UpdateLayout, DispatcherPriority.ContextIdle);
+      await Dispatcher.InvokeAsync(GalaxyCanvas.UpdateLayout, DispatcherPriority.ContextIdle);
 
-      if (sourceCanvas.ActualWidth == 0 || sourceCanvas.ActualHeight == 0)
+      if (GalaxyCanvas.ActualWidth == 0 || GalaxyCanvas.ActualHeight == 0)
         throw new InvalidOperationException("Canvas has zero width or height.");
 
       // Create a new canvas and copy properties
@@ -342,8 +343,8 @@ namespace X4Map
         Log.Debug($"Generating new ExportCanvas");
         ExportCanvas = new Canvas
         {
-          Width = sourceCanvas.ActualWidth,
-          Height = sourceCanvas.ActualHeight,
+          Width = GalaxyCanvas.ActualWidth,
+          Height = GalaxyCanvas.ActualHeight,
           Background = Brushes.Transparent
         };
       }), DispatcherPriority.ContextIdle);
@@ -354,8 +355,11 @@ namespace X4Map
       await Dispatcher.InvokeAsync(() =>
       {
         Log.Debug($"Copying all Child elements from sourceCanvas");
-        foreach (UIElement child in sourceCanvas.Children)
+        foreach (UIElement child in GalaxyCanvas.Children)
         {
+          if (child.IsVisible == false)
+            continue;
+          // Can't copy Station Images currently
           if (child is Image img && img.Source is System.Windows.Media.Imaging.WriteableBitmap)
             continue;
           try
@@ -382,10 +386,10 @@ namespace X4Map
       }, DispatcherPriority.ContextIdle);
     }
 
-    public async void ExportToPng(Canvas sourceCanvas, string filePath)
+    public async void ExportToPng(string filePath)
     {
-      Log.Info($"Starting export to PNG: Current Thread ID: {Environment.CurrentManagedThreadId}");
-      var task = await UpdateExportCanvas(sourceCanvas);
+      Log.Info($"Starting export to PNG...");
+      var task = await UpdateExportCanvas();
 
       var rtb = Dispatcher.Invoke(() =>
       {
@@ -404,6 +408,119 @@ namespace X4Map
         using var fs = System.IO.File.OpenWrite(filePath);
         encoder.Save(fs);
       });
+    }
+    
+    string ToSvgColor(Color? color)
+    {
+      if (color == null) return "#000";
+      return $"#{color.Value.R:X2}{color.Value.G:X2}{color.Value.B:X2}{color.Value.A:X2}";
+    }
+
+    private void WriteElement(XmlWriter writer, UIElement element, double canvasOffsetX = 0,
+            double canvasOffsetY = 0, double textAdditionalOffset = 0, double textWidth = 0)
+    {
+      if (element is Polygon poly)
+      {
+        if (poly.Tag.ToString() == "Empty Map Cell") return; // Skip empty map cells
+        double offsetX = Canvas.GetLeft(poly);
+        double offsetY = Canvas.GetTop(poly);
+        if (double.IsNaN(offsetX)) offsetX = 0;
+        if (double.IsNaN(offsetY)) offsetY = 0;
+        offsetX += canvasOffsetX;
+        offsetY += canvasOffsetY;
+
+        var points = string.Join(" ", poly.Points.Select(p => $"{p.X + offsetX},{p.Y + offsetY}"));
+        writer.WriteStartElement("polygon");
+        writer.WriteAttributeString("points", points);
+        writer.WriteAttributeString("stroke", ToSvgColor((poly.Stroke as SolidColorBrush)?.Color));
+        writer.WriteAttributeString("stroke-width", poly.StrokeThickness.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("fill", ToSvgColor((poly.Fill as SolidColorBrush)?.Color));
+        writer.WriteEndElement();
+        Log.Debug($"Wrote polygon with points: {points} - Fill: {(poly.Fill as SolidColorBrush)?.Color.ToString() ?? "none"} and stroke  {(poly.Stroke as SolidColorBrush)?.Color.ToString() ?? "#000"}");
+      }
+      else if (element is Line line)
+      {
+        writer.WriteStartElement("line");
+        writer.WriteAttributeString("x1", line.X1.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("y1", line.Y1.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("x2", line.X2.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("y2", line.Y2.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("stroke", ToSvgColor((line.Stroke as SolidColorBrush)?.Color));
+        writer.WriteAttributeString("stroke-width", line.StrokeThickness.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteEndElement();
+      }
+      else if (element is TextBlock textBlock)
+      {
+        
+        double offsetX = Canvas.GetLeft(textBlock);
+        double offsetY = Canvas.GetTop(textBlock);
+        if (double.IsNaN(offsetX)) offsetX = 0;
+        if (double.IsNaN(offsetY)) offsetY = 0;
+        offsetX += canvasOffsetX + textAdditionalOffset;
+        offsetY += canvasOffsetY;
+        Log.Debug($"Processing TextBlock at offset ({offsetX}, {offsetY}) - addedOffsets: ({textAdditionalOffset}, {canvasOffsetX}) - width: ({textWidth}) - Text: {textBlock.Text}");
+
+        writer.WriteStartElement("text");
+        writer.WriteAttributeString("x", offsetX.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("y", (offsetY + textBlock.FontSize).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("style", $"inline-size: {(int)textWidth}px;");
+        // writer.WriteAttributeString("text-anchor", "middle");
+        writer.WriteAttributeString("font-family", textBlock.FontFamily.Source);
+        writer.WriteAttributeString("text-weight", "bold"); // Hardcoded as SVG only has normal or bold
+        writer.WriteAttributeString("font-size", $"{textBlock.FontSize}");
+        writer.WriteAttributeString("fill", ToSvgColor((textBlock.Foreground as SolidColorBrush)?.Color));
+
+        writer.WriteString(textBlock.Text);
+        writer.WriteEndElement();
+        Log.Debug($"Wrote text: {textBlock.Text} at ({offsetX}, {offsetY})");
+      }
+      else if (element is Grid grid)
+      {
+        double offsetX = Canvas.GetLeft(grid) + canvasOffsetX;
+        double offsetY = Canvas.GetTop(grid) + canvasOffsetY;
+        double textStart = grid.ColumnDefinitions.ElementAt(0).ActualWidth;
+        double textColumnWidth = grid.ColumnDefinitions.ElementAt(1).ActualWidth;
+        Log.Debug($"Processing Grid at offset ({offsetX}, {offsetY}, {textStart}) - {grid.Children.Count} children");
+        foreach (UIElement child in grid.Children)
+        {
+          WriteElement(writer, child, offsetX, offsetY, textStart, textColumnWidth);
+        }
+      }
+    }
+
+    public async void ExportToSvg(string filePath)
+    {
+      Log.Info($"Starting export to SVG...");
+      var task = await UpdateExportCanvas();
+      await Dispatcher.InvokeAsync(() =>
+        {
+          using (var writer = System.Xml.XmlWriter.Create(filePath, new System.Xml.XmlWriterSettings { Indent = true }))
+          {
+            writer.WriteStartDocument();
+            writer.WriteStartElement("svg", "http://www.w3.org/2000/svg");
+            writer.WriteAttributeString("width", task.Width.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("height", task.Height.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("viewBox", $"0 0 {task.Width.ToString(System.Globalization.CultureInfo.InvariantCulture)} {task.Height.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            writer.WriteAttributeString("version", "2.0");
+
+            // Transparent background rectangle
+            writer.WriteStartElement("rect");
+            writer.WriteAttributeString("x", "0");
+            writer.WriteAttributeString("y", "0");
+            writer.WriteAttributeString("width", task.Width.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("height", task.Height.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("fill", "none"); // or "transparent"
+            writer.WriteEndElement();
+
+            foreach (UIElement child in ExportCanvas.Children)
+            {
+              WriteElement(writer, child);
+            }
+
+            writer.WriteEndElement(); // svg
+            writer.WriteEndDocument();
+          }
+        }, DispatcherPriority.ContextIdle);
     }
 
     private void CreateMap()

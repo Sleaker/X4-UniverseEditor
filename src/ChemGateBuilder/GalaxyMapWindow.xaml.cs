@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Input;
 using Utilities.Logging;
 using X4DataLoader;
 using X4Map;
@@ -111,13 +112,13 @@ namespace ChemGateBuilder
       }
     }
 
-    private async void ExportPngButton_Click(object sender, RoutedEventArgs e)
+    private async void ExportAsImageButton_Click(object sender, RoutedEventArgs e)
     {
       var dialog = new Microsoft.Win32.SaveFileDialog
       {
-        Filter = "PNG Image|*.png",
-        Title = "Export Galaxy Map as PNG",
-        FileName = "GalaxyMap.png"
+        Filter = "PNG Image|*.png|SVG File|*.svg",
+        Title = "Export Galaxy Map",
+        FileName = "GalaxyMap"
       };
       if (dialog.ShowDialog() != true)
       {
@@ -126,17 +127,29 @@ namespace ChemGateBuilder
 
       MainBusyIndicator.IsBusy = true;  // Show busy indicator
       // Allow the Busy Indicator to Update
-      await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+      await Dispatcher.InvokeAsync(() =>
+      {
+        Mouse.OverrideCursor = Cursors.Wait;
+      }, System.Windows.Threading.DispatcherPriority.Render);
       try
       {
-        await Task.Run(() => GalaxyMapViewer.ExportToPng(GalaxyMapCanvas, dialog.FileName));
+        string ext = System.IO.Path.GetExtension(dialog.FileName).ToLowerInvariant();
+        if (ext == ".svg")
+        {
+          await Task.Run(() => GalaxyMapViewer.ExportToSvg(dialog.FileName));
+        }
+        else
+        {
+          await Task.Run(() => GalaxyMapViewer.ExportToPng(dialog.FileName));
+        }
       }
       catch (Exception ex)
       {
-        Log.Warn($"Error exporting PNG: {ex}");
-        MessageBox.Show($"Error exporting PNG: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        Log.Warn($"Error exporting Image: {ex}");
+        MessageBox.Show($"Error exporting Image: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
       }
       finally {
+        Mouse.OverrideCursor = null;
         MainBusyIndicator.IsBusy = false; // Hide busy indicator
       }
     }

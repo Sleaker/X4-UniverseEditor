@@ -60,8 +60,8 @@
                 Margin="5,0,0,0"
                 Width="32"
                 Height="32"
-                Click="ExportPngButton_Click"
-                ToolTip="Export Galaxy Map as PNG">
+                Click="ExportAsImageButton_Click"
+                ToolTip="Export Galaxy Map as image">
                 <TextBlock Text="🖼" FontSize="18" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
         </Grid>
